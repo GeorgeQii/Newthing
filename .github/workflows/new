@@ -1,0 +1,62 @@
+name: Fetch News from GitHub Issues
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 每6小时自动运行一次
+  workflow_dispatch:        # 支持手动触发
+
+jobs:
+  fetch-news:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch news from Issues
+        run: |
+          # 替换为你的GitHub用户名和仓库名（例如：username/repo-name）
+          REPO="your-github-username/your-repo-name"
+          TOKEN="${{ secrets.GH_TOKEN }}"
+          
+          curl -s "https://api.github.com/repos/$REPO/issues?labels=news&state=open&sort=updated&direction=desc" \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" > temp-issues.json
+          
+          # 移除了Node.js代码中的注释以避免语法错误
+          node -e "
+            const fs = require('fs');
+            const issues = JSON.parse(fs.readFileSync('temp-issues.json', 'utf8'));
+            const newsList = issues.map(issue => ({
+              id: issue.id,
+              title: issue.title,
+              content: issue.body,
+              date: new Date(issue.updated_at).toLocaleDateString('zh-CN', { 
+                year: 'numeric', month: 'long', day: 'numeric' 
+              }),
+              cover: issue.labels.find(l => l.name.startsWith('cover:'))?.name.replace('cover:', '') || 'image/placeholder.jpg',
+              author: issue.user.login,
+              category: issue.labels.find(l => ['company', 'industry', 'technology'].includes(l.name))?.name || 'company'
+            }));
+            if (!fs.existsSync('data')) fs.mkdirSync('data');
+            fs.writeFileSync('data/news.json', JSON.stringify(newsList, null, 2), 'utf8');
+            console.log('News fetched successfully! Total:', newsList.length);
+          "
+          
+          rm temp-issues.json
+
+      - name: Commit and push news data
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add data/news.json
+          if git diff --cached --quiet; then
+            echo "No changes to news data"
+          else
+            git commit -m "Update news data $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          fi
+    
