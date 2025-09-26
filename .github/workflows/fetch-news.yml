@@ -1,0 +1,70 @@
+name: Fetch News from GitHub Issues
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 每6小时自动运行一次（可调整）
+  workflow_dispatch:        # 支持手动触发
+
+jobs:
+  fetch-news:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 拉取当前仓库代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 安装Node.js（用于处理新闻数据）
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 3. 拉取GitHub Issues并生成news.json
+      - name: Fetch news from Issues
+        run: |
+          # 替换为你的GitHub用户名和仓库名（例如：username/repo-name）
+          REPO="your-github-username/your-repo-name"
+          # GitHub Token（需要在仓库Settings→Secrets添加，命名为GH_TOKEN）
+          TOKEN="${{ secrets.GH_TOKEN }}"
+          
+          # 调用GitHub API拉取标签为"news"的Issues（只拉取已打开的）
+          curl -s "https://api.github.com/repos/$REPO/issues?labels=news&state=open&sort=updated&direction=desc" \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" > temp-issues.json
+          
+          # 使用Node.js处理数据，提取需要的字段（标题、内容、时间、封面图等）
+          node -e "
+            const fs = require('fs');
+            const issues = JSON.parse(fs.readFileSync('temp-issues.json', 'utf8'));
+            const newsList = issues.map(issue => ({
+              id: issue.id,
+              title: issue.title,
+              content: issue.body,  # 新闻正文（支持Markdown）
+              date: new Date(issue.updated_at).toLocaleDateString('zh-CN', { 
+                year: 'numeric', month: 'long', day: 'numeric' 
+              }),
+              cover: issue.labels.find(l => l.name.startsWith('cover:'))?.name.replace('cover:', '') || 'image/placeholder.jpg',
+              author: issue.user.login
+            }));
+            # 确保data文件夹存在
+            if (!fs.existsSync('data')) fs.mkdirSync('data');
+            # 写入news.json
+            fs.writeFileSync('data/news.json', JSON.stringify(newsList, null, 2), 'utf8');
+            console.log('News fetched successfully! Total:', newsList.length);
+          "
+          
+          # 删除临时文件
+          rm temp-issues.json
+
+      # 4. 提交并推送news.json到仓库
+      - name: Commit and push news data
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add data/news.json
+          # 只有当文件有变化时才提交
+          if git diff --cached --quiet; then
+            echo "No changes to news data"
+          else
+            git commit -m "Update news data $(date +'%Y-%m-%d %H:%M:%S')"
+            git push
+          fi
